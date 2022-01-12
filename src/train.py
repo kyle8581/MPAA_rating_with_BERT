@@ -1,11 +1,11 @@
+from models.model import Rater
+from data.dataloader import get_dataloader
+from utils.util import TorchHelper
 import wandb
 from tqdm import tqdm
-from dataloader import get_dataloader
 import warnings
 from sklearn.metrics import f1_score, recall_score, precision_score
 from tensorboardX import SummaryWriter
-from models.model import Rater
-from utils.util import TorchHelper
 from torch.nn import functional as F
 from torch import optim
 from random import shuffle
@@ -26,6 +26,7 @@ import argparse
 
 sys.path.append('../')
 sys.path.append("../data")
+
 # os.environ['CUDA_VISIBLE_DEVICES'] = '3'
 # os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 
@@ -45,20 +46,20 @@ warnings.filterwarnings('ignore')
 
 
 parser = argparse.ArgumentParser(description='MPAA rating with BERT.')
-parser.add_argument('batch_size', type=int,
+parser.add_argument('--batch_size', type=int,
                     help='(int) batch size', default=16)
 
-parser.add_argument('max_epochs', type=int,
+parser.add_argument('--max_epochs', type=int,
                     help='(int) max number of epochs', default=60)
 
-parser.add_argument("logger_type", type=str,
+parser.add_argument("--logger_type", type=str,
                     help="wandb or tensorboard", default="tensorboard")
 
 parser.add_argument(
-    "lr", type=float, help="initial learning rate", default=1e-6)
+    "--lr", type=float, help="initial learning rate", default=1e-6)
 
 parser.add_argument(
-    "base_dir", type=str, help="base directiory", default="/home/chaehyeong/MARS_hj/BERT_rating"
+    "--base_dir", type=str, help="base directiory", default="/home/chaehyeong/MARS_hj/BERT_rating"
 )
 
 
@@ -91,6 +92,7 @@ weight_decay_val = 0
 optimizer_type = 'adam'  # sgd
 
 base_dir = args.base_dir
+sys.path.append(os.path.join(base_dir, "data"))
 base_log_dir = os.path.join(base_dir, "results/log")
 log_dir = os.path.join(
     base_log_dir, f"lr_{learning_rate}_batch_size{batch_size}_")
@@ -98,7 +100,7 @@ summary = SummaryWriter(log_dir=os.path.join(base_dir, "results/log"))
 
 
 partition_dict = json.load(
-    open(os.path.join(base_dir, "data/partition.json", 'r')))
+    open(os.path.join(base_dir, "data/partition.json"), 'r'))
 
 if logger_type == "wandb":
     wandb.init()
@@ -112,7 +114,13 @@ if logger_type == "wandb":
     wandb.define_metric(
         "train_step/*", step_metric="train_step", summary="min")
     wandb.define_metric("train_epoch/*", step_metric="epoch")
+    wandb.define_metric("train_score_macro/*", step_metric="epoch")
+    wandb.define_metric("train_score_micro/*", step_metric="epoch")
+    wandb.define_metric("train_score_weighted/*", step_metric="epoch")
     wandb.define_metric("val_epoch/*", step_metric="epoch", summary="max")
+    wandb.define_metric("val_score_macro/*", step_metric="epoch")
+    wandb.define_metric("val_score_micro/*", step_metric="epoch")
+    wandb.define_metric("val_score_weighted/*", step_metric="epoch")
 
 train_id_list = partition_dict['train']
 val_id_list = partition_dict['val']
@@ -138,7 +146,7 @@ total_train_step_count = 0
 # ------------------------------------------------------------------
 # Functions
 # ----------------------------------------------------------------------------
-def create_model(device, mode):
+def create_model(device):
     """
     Creates and returns the EmotionFlowModel.
     Moves to GPU if found any.
@@ -175,9 +183,9 @@ def train(model, optimizer, dataloader, device):
     batch_idx = 1
     total_loss = 0
 
-    for step, batch in enumerate(tqdm(dataloader)):
+    for step, batch in enumerate(dataloader):
 
-        x, y = batch["x"].to(device), batch["y"]
+        x, y = batch["x"].to(device), batch["y"].squeeze(-1)
 
         out = model(x)
 
@@ -189,7 +197,6 @@ def train(model, optimizer, dataloader, device):
             for k, v in batch.items():
                 print(f"{k} : {v}")
 
-        print(f"cross entropy loss : {ce_loss}")
         loss = ce_loss
 
         total_loss += loss.item()
@@ -233,7 +240,7 @@ def evaluate(model, dataloader, device, epoch, logger_prefix):
         for step, batch in enumerate(tqdm(dataloader)):
 
             x, y = \
-                batch["tokenized_script"].to(device), batch["rating"]
+                batch["x"].to(device), batch["y"].squeeze(-1)
 
             out = model(x)
 
@@ -266,9 +273,9 @@ def evaluate(model, dataloader, device, epoch, logger_prefix):
     if logger_type == "wandb":
         for t in average_type:
             wandb.log({
-                f"{logger_prefix}/f1_{t}": f1[t],
-                f"{logger_prefix}/recall_{t}": recall[t],
-                f"{logger_prefix}/precision_{t}": precision[t],
+                f"{logger_prefix}_score_{t}/f1": f1[t],
+                f"{logger_prefix}_score_{t}/recall": recall[t],
+                f"{logger_prefix}_score_{t}/precision": precision[t],
                 "epoch": epoch
 
             })
@@ -285,9 +292,9 @@ def training_loop(batch_size, device):
     """
 
     print("started loading datalodaers...")
-    train_dataloader = get_dataloader("train", batch_size)
-    val_dataloader = get_dataloader("val", batch_size)
-    test_dataloader = get_dataloader("test", batch_size)
+    train_dataloader = get_dataloader("train", batch_size, base_dir)
+    val_dataloader = get_dataloader("val", batch_size, base_dir)
+    test_dataloader = get_dataloader("test", batch_size, base_dir)
     print("successfully loaded dataloaders.")
 
     model = create_model(device)
@@ -307,14 +314,21 @@ def training_loop(batch_size, device):
         model = train(model, optimizer, train_dataloader, device)
 
         val_pred, val_loss1, val_f1 = evaluate(
-            model, val_dataloader, device, epoch, "val_epoch")
+            model, val_dataloader, device, epoch, "val")
         train_pred, train_loss1, train_f1 = evaluate(
-            model, train_dataloader, device, epoch, "train_epoch")
+            model, train_dataloader, device, epoch, "train")
         if logger_type == "tensorboard":
             summary.add_scalar("train_loss_epoch", train_loss1, epoch)
             summary.add_scalar("train_f1_epoch", train_f1, epoch)
             summary.add_scalar("val_loss", val_loss1, epoch)
             summary.add_scalar("val_f1", val_f1, epoch)
+
+        if logger_type == "wandb":
+            wandb.log({
+                "train_epoch/loss": train_loss1,
+                "val_epoch/loss": val_loss1,
+                "epoch": epoch
+            })
 
         current_lr = 0
         for pg in optimizer.param_groups:
@@ -345,8 +359,9 @@ def training_loop(batch_size, device):
 
 def test(batch_size, device):
     model = create_model(device)
-    test_dataloader = get_dataloader("test", batch_size)
-    val_pred, val_loss1, val_f1 = evaluate(model, test_dataloader, device)
+    test_dataloader = get_dataloader("test", batch_size, base_dir)
+    val_pred, val_loss1, val_f1 = evaluate(
+        model, test_dataloader, device, 0, "test")
     print('Validation Loss %.5f, Validation F1 %.5f' % (val_loss1, val_f1))
 
 
