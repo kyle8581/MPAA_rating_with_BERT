@@ -57,6 +57,10 @@ parser.add_argument("logger_type", type=str,
 parser.add_argument(
     "lr", type=float, help="initial learning rate", default=1e-6)
 
+parser.add_argument(
+    "base_dir", type=str, help="base directiory", default="/home/chaehyeong/MARS_hj/BERT_rating"
+)
+
 
 args = parser.parse_args()
 
@@ -86,7 +90,7 @@ clip_grad = 0.5
 weight_decay_val = 0
 optimizer_type = 'adam'  # sgd
 
-base_dir = "/home/chaehyeong/MARS_hj/BERT_rating"
+base_dir = args.base_dir
 base_log_dir = os.path.join(base_dir, "results/log")
 log_dir = os.path.join(
     base_log_dir, f"lr_{learning_rate}_batch_size{batch_size}_")
